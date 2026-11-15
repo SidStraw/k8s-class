@@ -3,6 +3,7 @@
 require('../js/sim.js');
 require('../js/shell.js');
 require('../js/levels.js');
+require('../js/guide.js');
 const G = globalThis.K8sGame;
 const verbose = process.argv.includes('-v');
 let fail = 0;

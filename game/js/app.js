@@ -7,13 +7,34 @@
   const STORE = 'k8s-helm-training-v1';
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const md = (s) =>
-    esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  function md(src) {
+    const lines = String(src).split('\n');
+    let h = '';
+    let para = [];
+    const flush = () => {
+      if (para.length) h += para.join('<br>');
+      para = [];
+    };
+    for (let i = 0; i < lines.length; ) {
+      if (lines[i].startsWith('```')) {
+        flush();
+        const buf = [];
+        for (i++; i < lines.length && !lines[i].startsWith('```'); i++) buf.push(lines[i]);
+        i++;
+        h += '<pre class="code">' + esc(buf.join('\n')) + '</pre>';
+      } else if (lines[i].startsWith('|')) {
+        flush();
+        const rows = [];
+        for (; i < lines.length && lines[i].startsWith('|'); i++) rows.push(lines[i].replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+        h += '<table class="t"><thead><tr>' + rows[0].map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr></thead><tbody>' + rows.slice(1).map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+      } else para.push(inline(lines[i++]));
+    }
+    flush();
+    return h;
+  }
 
-  const state = { idx: 0, level: null, w: null, file: null, hist: [], hpos: 0, shown: {}, save: { done: {}, real: {}, last: null } };
+  const state = { idx: 0, level: null, w: null, file: null, hist: [], hpos: 0, shown: {}, miss: 0, learnOpen: true, save: { done: {}, real: {}, last: null, tour: 0 } };
   try {
     Object.assign(state.save, JSON.parse(localStorage.getItem(STORE) || '{}'));
   } catch (e) {
@@ -36,6 +57,8 @@
     state.save.last = lv.id;
     persist();
     state.shown = {};
+    state.miss = 0;
+    state.learnOpen = true;
     state.file = null;
     const staged = lv.type === 'quiz' || lv.type === 'final';
     $('#ide').hidden = staged;
@@ -46,6 +69,7 @@
     if (staged) {
       state.w = null;
       state.answers = {};
+      state.tried = {};
       if (lv.type === 'quiz') renderQuiz();
       else renderFinal();
     } else {
@@ -57,8 +81,11 @@
       openFile(null);
       if (first && lv.id !== '1-1') openFile(first, true);
       $('#cmd').focus();
+      if (state.save.tour < 2) showTour(2);
     }
     renderAll();
+    $('#mission').scrollTop = 0;
+    $('#stage').scrollTop = 0;
   }
   function renderAll() {
     renderTop();
@@ -90,33 +117,53 @@
       })
       .join('');
   }
+  const HINT_TERM = '這一步在**下方的終端機**完成：把步驟裡灰底的指令打進去，按 Enter。也可以直接**點灰底的指令**，它會自動填進終端機。指令裡的 `<名稱>` 要換成實際的名稱（點右邊面板的 Pod 可以貼上）。';
+  const HINT_EDIT = '這一步要改檔案：在中間上方的檔案清單點檔名，直接在右邊修改（會自動儲存，右上角會顯示 YAML 格式對不對）。改完再到終端機執行 `kubectl apply`。真的卡住就按「看解答」，可以一鍵套用。';
+  function stepWhere(st) {
+    if (st.where) return st.where;
+    const edits = st.sol.some((x) => typeof x === 'object');
+    const cmds = st.sol.some((x) => typeof x !== 'object');
+    return edits && cmds ? '編輯器＋終端機' : edits ? '編輯器' : '終端機';
+  }
   function renderMission() {
     const lv = state.level;
     const ch = G.chapters[lv.ch];
     let h = '<div class="eyebrow">第 ' + ch.id + ' 章　' + esc(ch.title) + '　·　' + esc(ch.env) + '</div><h1>' + esc(lv.id === 'final' ? lv.title : lv.id + '　' + lv.title) + '</h1>';
-    if (lv.intro) h += '<div class="intro">' + md(lv.intro) + '</div>';
     const next = '<button type="button" class="next" data-next="1">' + (state.idx + 1 < G.levels.length ? '下一關 →' : '回到關卡地圖') + '</button>';
     if (lv.type === 'quiz') {
       const n = lv.questions.filter((q, i) => state.answers[i] === q.answer).length;
-      h += '<p class="muted">答對 ' + n + '／' + lv.questions.length + ' 題。答錯可以重選，重點是看懂解說。</p>';
+      h += '<p class="muted">' + (lv.progressive ? '右邊一次出現一張卡片：先讀觀念，再回答下面的小問題，答對才會出現下一張。' : '右邊每一題選一個答案，答對會出現解說。') + '答錯可以重選，不會扣分。</p>';
+      h += '<ol class="steps">';
+      lv.questions.forEach((q, i) => {
+        const cls = state.answers[i] === q.answer ? 'done' : i === n ? 'cur' : 'todo';
+        h += '<li class="' + cls + '">' + esc(q.topic || '第 ' + (i + 1) + ' 題') + '</li>';
+      });
+      h += '</ol>';
       if (n === lv.questions.length) h += '<div class="done-box"><h3>完成</h3>' + md(lv.outro || '') + '</div>' + next;
     } else if (lv.type === 'final') {
       h += '<div class="intro">右邊是研究報告整理的 10 項「最小可行程度」。模擬器能讓你把流程和錯誤的長相練熟，但每一項都要在真的環境親手做過才算數。</div>';
     } else {
       const w = state.w;
-      h += '<ol class="steps">';
+      if (lv.intro) h += '<div class="intro">' + md(lv.intro) + '</div>';
+      if (lv.learn) {
+        h += '<details class="learn"' + (state.learnOpen ? ' open' : '') + '><summary>本關新觀念（先看這裡）</summary><dl>' + lv.learn.map((x) => '<dt>' + esc(x[0]) + '</dt><dd>' + md(x[1]) + '</dd>').join('') + '</dl></details>';
+      }
+      h += '<h2 class="steps-h">步驟 <span class="muted">' + Math.min(w.step + 1, lv.steps.length) + '／' + lv.steps.length + '</span></h2><ol class="steps">';
       lv.steps.forEach((st, i) => {
         const cls = i < w.step ? 'done' : i === w.step ? 'cur' : 'todo';
-        h += '<li class="' + cls + '">' + md(st.text);
-        if (cls !== 'todo' && st.why) h += '<div class="why">' + md(st.why) + '</div>';
+        h += '<li class="' + cls + '">';
+        if (cls === 'cur') h += '<span class="where">在「' + esc(stepWhere(st)) + '」操作</span>';
+        h += md(st.text);
+        if (cls === 'cur' && st.parts) h += '<div class="parts"><div class="parts-h">拆解這個指令</div>' + st.parts.map((p) => '<div><code>' + esc(p[0]) + '</code><span>' + inline(p[1]) + '</span></div>').join('') + '</div>';
+        if (cls !== 'todo' && (st.why || st.read)) h += '<div class="why">' + md([st.why, st.read].filter(Boolean).join('\n\n')) + '</div>';
         if (cls === 'cur') {
           const lvl = state.shown[i] || 0;
           h += '<div class="step-actions">';
-          if (st.hint && lvl < 1) h += '<button type="button" class="ghost" data-hint="' + i + '">給我提示</button>';
+          if (lvl < 1) h += '<button type="button" class="ghost" data-hint="' + i + '">卡住了？給我提示</button>';
           if (lvl < 2) h += '<button type="button" class="ghost" data-solbtn="' + i + '">看解答</button>';
           h += '</div>';
-          if (st.hint && lvl >= 1) h += '<div class="hint">' + md(st.hint) + '</div>';
-          if (lvl >= 2) h += '<div class="sol">點一下就會填進終端機（按 Enter 執行）：' + solutionHtml(st, i) + '</div>';
+          if (lvl >= 1) h += '<div class="hint">' + md((st.hint ? st.hint + '\n\n' : '') + (stepWhere(st) === '終端機' ? HINT_TERM : stepWhere(st) === '檔案區' ? '在中間上方的檔案清單，點一下檔名就會開啟。' : HINT_EDIT)) + '</div>';
+          if (lvl >= 2) h += '<div class="sol">解答。點一下指令會填進終端機（再按 Enter 執行）：' + solutionHtml(st, i) + '</div>';
         }
         h += '</li>';
       });
@@ -129,7 +176,16 @@
     }
     $('#mission').innerHTML = h;
   }
+  $('#mission').addEventListener('toggle', (e) => {
+    if (e.target.classList && e.target.classList.contains('learn')) state.learnOpen = e.target.open;
+  }, true);
   $('#mission').addEventListener('click', (e) => {
+    const code = e.target.closest('li.cur code');
+    if (code && state.w && /^(kubectl|docker|orb|curl|gcloud|git|sim|cat|ls|help)\b/.test(code.textContent)) {
+      $('#cmd').value = code.textContent;
+      $('#cmd').focus();
+      return;
+    }
     const t = e.target.closest('button');
     if (!t) return;
     if (t.dataset.hint) state.shown[t.dataset.hint] = 1;
@@ -274,8 +330,23 @@
     }
     const r = G.run(w, line);
     printResult(r);
+    const before = w.step;
     afterChange();
     renderFiles();
+    const lv = state.level;
+    if (w.step > before || w.step >= lv.steps.length) state.miss = 0;
+    else {
+      state.miss++;
+      const lvl = state.shown[w.step] || 0;
+      if (lvl < 1 && ((!r.ok && state.miss >= 2) || state.miss >= 4)) {
+        state.shown[w.step] = 1;
+        print('💡 教練：這一步好像卡住了，左邊已經幫你打開提示。', 'tip');
+        renderMission();
+      } else if (lvl === 1 && state.miss >= 7) {
+        state.miss = 0;
+        print('💡 教練：還是不順的話，按左邊的「看解答」，照著做一次再回頭看說明也可以。', 'tip');
+      }
+    }
   }
   $('#cmd').addEventListener('keydown', (e) => {
     const inp = e.target;
@@ -390,19 +461,26 @@
   // ---------- 測驗與結業 ----------
   function renderQuiz() {
     const lv = state.level;
+    const firstOpen = lv.questions.findIndex((q, i) => state.answers[i] !== q.answer);
     let h = '<div class="stage-inner">';
+    if (lv.intro) h += '<div class="lesson-intro">' + md(lv.intro) + '</div>';
     lv.questions.forEach((q, i) => {
+      if (lv.progressive && firstOpen >= 0 && i > firstOpen) return;
       const a = state.answers[i];
-      const tried = (state.tried = state.tried || {})[lv.id + i] || [];
-      h += '<div class="q"><h3>' + (i + 1) + '. ' + md(q.q) + '</h3>';
+      const tried = state.tried[lv.id + i] || [];
+      h += '<div class="q" id="q' + i + '">';
+      if (q.teach) h += '<div class="eyebrow">觀念 ' + (i + 1) + '／' + lv.questions.length + (q.topic ? '　' + esc(q.topic) : '') + '</div><div class="teach">' + md(q.teach) + '</div><div class="ask">確認一下</div>';
+      h += '<h3>' + (q.teach ? '' : i + 1 + '. ') + md(q.q) + '</h3>';
       q.options.forEach((o, j) => {
         const cls = a === q.answer && j === q.answer ? 'right' : tried.includes(j) && j !== q.answer ? 'wrong' : '';
         h += '<button type="button" class="opt ' + cls + '" data-q="' + i + '" data-o="' + j + '"' + (a === q.answer ? ' disabled' : '') + '>' + md(o) + '</button>';
       });
-      if (a === q.answer) h += '<div class="explain">' + md(q.explain) + '</div>';
-      else if (tried.length) h += '<div class="explain" style="border-color:var(--bad)">再想想，換一個選項試試。</div>';
+      if (a === q.answer) h += '<div class="explain"><strong>答對了。</strong>' + md(q.explain) + '</div>';
+      else if (tried.length) h += '<div class="explain" style="border-color:var(--bad)">不是這個。回頭看一下上面的說明，再選一次。</div>';
       h += '</div>';
     });
+    if (lv.progressive && firstOpen >= 0 && firstOpen < lv.questions.length - 1) h += '<p class="muted more">答對這一題，下一張卡片就會出現（還有 ' + (lv.questions.length - 1 - firstOpen) + ' 張）。</p>';
+    if (firstOpen < 0) h += '<div class="done-box"><h3>這一關完成了</h3>' + md(lv.outro || '') + '</div><button type="button" class="next" data-next="1">下一關 →</button>';
     $('#stage').innerHTML = h + '</div>';
   }
   function renderFinal() {
@@ -416,6 +494,7 @@
     $('#stage').innerHTML = h;
   }
   $('#stage').addEventListener('click', (e) => {
+    if (e.target.closest('button[data-next]')) return load(state.idx + 1);
     const b = e.target.closest('button.opt');
     if (!b) return;
     const lv = state.level;
@@ -431,6 +510,10 @@
     renderQuiz();
     renderMission();
     renderTop();
+    if (j === lv.questions[i].answer) {
+      const nxt = document.getElementById('q' + (i + 1)) || $('#stage .done-box');
+      if (nxt && lv.progressive) nxt.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
   });
   $('#stage').addEventListener('change', (e) => {
     if (e.target.dataset.real == null) return;
@@ -467,6 +550,48 @@
   });
   $('#btn-reset').addEventListener('click', () => load(state.idx));
 
+  function modal(title, html) {
+    $('#modal-title').textContent = title;
+    $('#modal-body').innerHTML = html;
+    $('#modal').hidden = false;
+    $('#modal-close').focus();
+  }
+  const closeModal = () => ($('#modal').hidden = true);
+  // stage 1：第一次進來；stage 2：第一次進到有終端機的關卡。
+  function showTour(stage) {
+    if (stage && state.save.tour < stage) {
+      state.save.tour = stage;
+      persist();
+    }
+    const ops = !!state.w;
+    let h = '';
+    if (!ops) {
+      h += '<p><strong>這是什麼？</strong>一個在瀏覽器裡<strong>模擬</strong> Kubernetes 的練習場。裡面的終端機、叢集、雲端都是假的，不會動到你的電腦，也不會產生任何費用，可以放心亂試。</p>';
+      h += '<p><strong>怎麼進行？</strong></p><ul><li><strong>第 0 章（現在這裡）</strong>：不用打指令。右邊一張一張讀觀念卡片，每張後面有一題小問題，答對就出現下一張。</li><li><strong>第 1 章起</strong>：動手操作。左邊會一步一步告訴你要打什麼指令、為什麼，並把每個新指令拆開解釋。</li></ul>';
+    }
+    h += '<p><strong>' + (ops ? '這一關開始要動手了。畫面分成四塊：' : '第 1 章起的畫面長這樣：') + '</strong></p>';
+    h += '<div class="tour-grid"><div class="a"><b>① 任務</b>照著步驟做。目前的步驟會標示要在哪裡操作，有「提示」和「看解答」。</div><div class="b"><b>② 檔案與編輯器</b>專案裡的 YAML。點檔名開啟，直接改，會自動儲存。</div><div class="c"><b>③ 終端機</b>在最下面那一行打指令，按 Enter。步驟裡灰底的指令可以直接點，會幫你填好。</div><div class="d"><b>④ 叢集現況</b>你的指令造成的結果會即時畫在這裡。綠點是健康的 Pod，紅點是壞掉的。</div></div>';
+    h += '<p><strong>卡住的時候：</strong></p><ul><li>按步驟下方的<strong>「卡住了？給我提示」</strong>，再不行按<strong>「看解答」</strong>，解答可以一鍵填入。連續幾次沒進展，提示會自動打開。</li><li>看不懂名詞：右上角<strong>「名詞小抄」</strong>。</li><li>把環境弄壞了：右上角<strong>「重設本關」</strong>。</li><li>想跳關或回頭：右上角<strong>「關卡地圖」</strong>。</li></ul>';
+    h += '<p><button type="button" id="tour-ok">開始</button></p>';
+    modal('怎麼玩', h);
+    $('#tour-ok').addEventListener('click', closeModal);
+  }
+  function showGlossary() {
+    let h = '<h3 class="gl-h">最常用的指令</h3><dl class="gl">' + G.cheats.map((x) => '<dt>' + esc(x[0]) + '</dt><dd>' + md(x[1]) + '</dd>').join('') + '</dl>';
+    h += '<h3 class="gl-h">名詞</h3><dl class="gl">' + G.glossary.map((x) => '<dt>' + esc(x[0]) + '</dt><dd>' + md(x[1]) + '</dd>').join('') + '</dl>';
+    modal('名詞小抄', h);
+  }
+  $('#btn-help').addEventListener('click', () => showTour(0));
+  $('#btn-gloss').addEventListener('click', showGlossary);
+  $('#modal-close').addEventListener('click', closeModal);
+  $('#modal').addEventListener('click', (e) => {
+    if (e.target === $('#modal')) closeModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+
   const start = G.levels.findIndex((l) => l.id === state.save.last);
   load(start >= 0 ? start : 0);
+  if (state.save.tour < 1) showTour(1);
 })();

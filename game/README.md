@@ -39,6 +39,7 @@ open game/index.html
 - `js/sim.js`：叢集模擬器（Pod 狀態、滾動更新、Service／Gateway 路由、Kustomize）
 - `js/shell.js`：模擬的 `kubectl`、`docker`、`orb`、`curl` 等指令
 - `js/levels.js`：關卡內容與過關條件
+- `js/guide.js`：教學補充（觀念卡片、本關新觀念、指令拆解、名詞小抄）
 - `js/app.js`、`styles.css`、`index.html`：介面
 - `vendor/js-yaml.min.js`：YAML 解析（MIT 授權）
 
