@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>舵手訓練：Kubernetes 互動學習</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="wheel" aria-hidden="true">☸</span><span>舵手訓練</span><small>從前端到 Jr DevOps 的 Kubernetes 模擬演練</small></div>
+  <div class="top-right">
+    <span id="ctx" class="ctx" title="kubectl 目前的 context"></span>
+    <span id="progress" class="progress"></span>
+    <button id="btn-reset" type="button" class="ghost">重設本關</button>
+    <button id="btn-map" type="button">關卡地圖</button>
+  </div>
+</header>
+
+<main id="main">
+  <aside id="mission" class="panel" aria-label="任務說明"></aside>
+
+  <section id="ide" class="work">
+    <div class="panel editor">
+      <div class="files" id="files" aria-label="專案檔案"></div>
+      <div class="edit-pane">
+        <div class="edit-head"><span id="file-name">點左邊的檔案來開啟</span><span id="file-status"></span></div>
+        <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="檔案內容" disabled></textarea>
+      </div>
+    </div>
+    <div class="panel term" id="term">
+      <div class="term-head"><span>終端機（模擬）</span><span class="muted">Tab 補完 · ↑↓ 歷史 · 輸入 help 看支援的指令</span></div>
+      <div id="term-out" class="term-out" aria-live="polite"></div>
+      <label class="term-in"><span id="prompt"></span><input id="cmd" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="指令輸入"></label>
+    </div>
+  </section>
+
+  <section id="stage" class="panel stage" hidden></section>
+
+  <aside id="viz" class="panel viz" aria-label="叢集狀態"></aside>
+</main>
+
+<div id="map" class="overlay" hidden>
+  <div class="map-card" role="dialog" aria-label="關卡地圖">
+    <div class="map-head"><h2>關卡地圖</h2><button id="btn-map-close" type="button" class="ghost">關閉</button></div>
+    <div id="map-body"></div>
+  </div>
+</div>
+
+<script src="vendor/js-yaml.min.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/shell.js"></script>
+<script src="js/levels.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
